@@ -1,6 +1,8 @@
 import React, { useState, useCallback } from 'react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
 import JSZip from 'jszip';
+import { ImageOptimizer } from './components/ImageOptimizer';
+import { ZoomableImage } from './components/ZoomableImage';
 import { 
   Upload, 
   Image as ImageIcon, 
@@ -24,7 +26,8 @@ import {
   Briefcase,
   Globe,
   ExternalLink,
-  Layers
+  Layers,
+  Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -67,7 +70,7 @@ const TEXTURES: { id: any; label: string }[] = [
   { id: 'velvet', label: 'Velvet' },
 ];
 
-type View = 'home' | 'product' | 'visualizer' | 'contact';
+type View = 'home' | 'product' | 'visualizer' | 'contact' | 'optimizer';
 
 interface ProductItem {
   id: string;
@@ -204,6 +207,53 @@ export default function App() {
   const [results, setResults] = useState<MockupResult[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showOptimizer, setShowOptimizer] = useState(false);
+  const [showShopifyImport, setShowShopifyImport] = useState(false);
+  const [shopifyProducts, setShopifyProducts] = useState<any[]>([]);
+  const [isFetchingShopify, setIsFetchingShopify] = useState(false);
+  const [isUploadingToShopify, setIsUploadingToShopify] = useState<string | null>(null);
+
+  const fetchShopifyProducts = async () => {
+    setIsFetchingShopify(true);
+    try {
+      const response = await fetch('/api/shopify/products');
+      const data = await response.json();
+      if (data.products) {
+        setShopifyProducts(data.products);
+      } else if (data.error) {
+        setError(data.error);
+      }
+    } catch (err) {
+      setError("Failed to connect to Shopify server.");
+    } finally {
+      setIsFetchingShopify(false);
+    }
+  };
+
+  const uploadToShopify = async (result: MockupResult, productId: string) => {
+    setIsUploadingToShopify(result.id);
+    try {
+      const response = await fetch('/api/shopify/upload-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId,
+          base64Image: result.imageUrl,
+          filename: `landmark-mockup-${result.medium}.png`
+        })
+      });
+      const data = await response.json();
+      if (data.image) {
+        alert("Successfully uploaded to Shopify!");
+      } else {
+        alert("Failed to upload to Shopify: " + (data.error || "Unknown error"));
+      }
+    } catch (err) {
+      alert("Error uploading to Shopify.");
+    } finally {
+      setIsUploadingToShopify(null);
+    }
+  };
 
   const onProductDrop = useCallback(async (acceptedFiles: File[]) => {
     const newProducts = await Promise.all(acceptedFiles.map(async (file) => {
@@ -245,6 +295,10 @@ export default function App() {
 
   const removeProduct = (id: string) => {
     setProducts(prev => prev.filter(p => p.id !== id));
+  };
+
+  const updateProduct = (id: string, newUrl: string, newBase64: string) => {
+    setProducts(prev => prev.map(p => p.id === id ? { ...p, url: newUrl, base64: newBase64 } : p));
   };
 
   const toggleMedium = (medium: MediumType) => {
@@ -333,12 +387,14 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-10">
-            {['All', 'New In', 'Trending', 'Designers', 'Clothing', 'Shoes', 'Bags', 'Jewelry', 'Accessories', 'Editorial', 'Sale', 'Visualizer', 'Contact'].map((cat) => (
+            {['All', 'New In', 'Trending', 'Designers', 'Clothing', 'Shoes', 'Bags', 'Jewelry', 'Accessories', 'Editorial', 'Sale', 'Visualizer', 'Optimizer', 'Contact'].map((cat) => (
               <button 
                 key={cat} 
                 onClick={() => {
                   if (cat === 'Visualizer') {
                     setView('visualizer');
+                  } else if (cat === 'Optimizer') {
+                    setView('optimizer');
                   } else if (cat === 'Contact') {
                     setView('contact');
                   } else {
@@ -350,8 +406,9 @@ export default function App() {
                   "text-[10px] uppercase tracking-[0.25em] font-medium hover:opacity-50 transition-opacity",
                   cat === 'Sale' ? 'text-rose-600' : '',
                   (cat === 'Visualizer' && view === 'visualizer') || 
+                  (cat === 'Optimizer' && view === 'optimizer') ||
                   (cat === 'Contact' && view === 'contact') ||
-                  (cat !== 'Visualizer' && cat !== 'Contact' && view === 'home' && selectedCategory === cat) ? 'border-b border-[#1A1A1A] pb-1' : ''
+                  (cat !== 'Visualizer' && cat !== 'Optimizer' && cat !== 'Contact' && view === 'home' && selectedCategory === cat) ? 'border-b border-[#1A1A1A] pb-1' : ''
                 )}
               >
                 {cat}
@@ -364,45 +421,95 @@ export default function App() {
       {view === 'home' && (
         <main className="max-w-[1800px] mx-auto p-10 lg:p-20">
           {selectedCategory === 'All' && (
-            <section className="mb-32 relative h-[70vh] overflow-hidden flex items-center justify-center">
-              <img 
-                src="https://picsum.photos/seed/luxury-hero/1920/1080?blur=2" 
-                alt="Hero" 
-                className="absolute inset-0 w-full h-full object-cover scale-105"
-                referrerPolicy="no-referrer"
-              />
-              <div className="absolute inset-0 bg-black/20" />
-              <div className="relative text-center text-white space-y-8 max-w-4xl px-6">
-                <motion.span 
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="text-[10px] uppercase tracking-[0.6em] font-bold block"
+            <>
+              <section className="mb-32 relative h-[85vh] overflow-hidden flex items-center justify-center">
+                <motion.div 
+                  initial={{ scale: 1.1, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ duration: 1.5, ease: "easeOut" }}
+                  className="absolute inset-0"
                 >
-                  The Spring Curation 2026
-                </motion.span>
-                <motion.h2 
-                  initial={{ opacity: 0, y: 30 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.2 }}
-                  className="text-7xl md:text-8xl font-serif font-light italic leading-tight"
-                >
-                  Timeless Elegance <br /> Reimagined
-                </motion.h2>
+                  <img 
+                    src="https://picsum.photos/seed/luxury-hero-2/1920/1080" 
+                    alt="Hero" 
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-[#F5F2ED]/20" />
+                </motion.div>
+                
+                <div className="relative text-center text-white space-y-10 max-w-5xl px-6">
+                  <motion.div
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.5, duration: 0.8 }}
+                    className="space-y-4"
+                  >
+                    <span className="text-[11px] uppercase tracking-[0.8em] font-bold block opacity-80">
+                      Est. 1998 — London
+                    </span>
+                    <h2 className="text-8xl md:text-9xl font-serif font-light italic leading-[0.9] tracking-tighter">
+                      The Art of <br /> 
+                      <span className="pl-20">Rare Acquisition</span>
+                    </h2>
+                  </motion.div>
+                  
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 1.2 }}
+                    className="flex flex-col items-center gap-8"
+                  >
+                    <p className="text-[14px] tracking-[0.2em] uppercase font-light max-w-md mx-auto opacity-70">
+                      Curating the world's most exceptional timepieces and high jewelry.
+                    </p>
+                    <button 
+                      onClick={() => setSelectedCategory('New In')}
+                      className="group relative px-16 py-6 overflow-hidden transition-all"
+                    >
+                      <div className="absolute inset-0 bg-white transition-transform duration-500 group-hover:scale-105" />
+                      <span className="relative text-[#1A1A1A] text-[11px] uppercase tracking-[0.5em] font-bold">
+                        Discover the Collection
+                      </span>
+                    </button>
+                  </motion.div>
+                </div>
+
                 <motion.div 
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  transition={{ delay: 0.5 }}
-                  className="pt-8"
+                  transition={{ delay: 2 }}
+                  className="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 opacity-40"
                 >
-                  <button 
-                    onClick={() => setSelectedCategory('New In')}
-                    className="px-12 py-5 bg-white text-[#1A1A1A] text-[11px] uppercase tracking-[0.4em] font-bold hover:bg-[#F5F2ED] transition-all"
-                  >
-                    Explore New Arrivals
-                  </button>
+                  <span className="text-[9px] uppercase tracking-[0.4em] font-bold">Scroll</span>
+                  <div className="w-px h-12 bg-white/50" />
                 </motion.div>
-              </div>
-            </section>
+              </section>
+
+              {/* Editorial Lookbook Section */}
+              <section className="mb-40 grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
+                <div className="lg:col-span-5 space-y-12 pr-10">
+                  <span className="text-[10px] uppercase tracking-[0.4em] font-bold text-[#1A1A1A]/40">Editorial 01</span>
+                  <h3 className="text-6xl font-serif font-light italic leading-tight">
+                    A Dialogue <br /> Between <br /> Light & Form
+                  </h3>
+                  <p className="text-[14px] leading-relaxed text-[#1A1A1A]/60 max-w-sm">
+                    Our latest curation explores the interplay of precious metals and architectural silhouettes, defining a new era of understated luxury.
+                  </p>
+                  <button className="text-[11px] uppercase tracking-[0.3em] font-bold border-b border-[#1A1A1A] pb-2 hover:opacity-50 transition-opacity">
+                    View Lookbook
+                  </button>
+                </div>
+                <div className="lg:col-span-7 grid grid-cols-2 gap-10">
+                  <div className="aspect-[3/5] bg-[#F5F2ED] overflow-hidden mt-20">
+                    <img src="https://picsum.photos/seed/editorial-1/800/1200" alt="Editorial" className="w-full h-full object-cover hover:scale-110 transition-transform duration-[2s]" referrerPolicy="no-referrer" />
+                  </div>
+                  <div className="aspect-[3/5] bg-[#F5F2ED] overflow-hidden">
+                    <img src="https://picsum.photos/seed/editorial-2/800/1200" alt="Editorial" className="w-full h-full object-cover hover:scale-110 transition-transform duration-[2s]" referrerPolicy="no-referrer" />
+                  </div>
+                </div>
+              </section>
+            </>
           )}
 
           <div className="mb-16 flex items-center justify-between border-b border-[#1A1A1A]/10 pb-8">
@@ -445,6 +552,53 @@ export default function App() {
               </motion.div>
             ))}
           </div>
+
+          {selectedCategory === 'All' && (
+            <section className="mt-40 border-t border-[#1A1A1A]/10 pt-40">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-32 items-center">
+                <div className="space-y-12">
+                  <div className="flex items-center gap-4 opacity-30">
+                    <div className="w-8 h-px bg-[#1A1A1A]" />
+                    <span className="text-[10px] uppercase tracking-[0.4em] font-bold">Our Heritage</span>
+                  </div>
+                  <h3 className="text-7xl font-serif font-light italic leading-[0.9] tracking-tight">
+                    A Legacy of <br /> 
+                    <span className="pl-20">Uncompromising</span> <br />
+                    Excellence
+                  </h3>
+                  <div className="space-y-8 text-[15px] leading-relaxed text-[#1A1A1A]/60 max-w-lg">
+                    <p>
+                      Landmark Global Trade Inc. 的创立源于对卓越的追求，以及为最挑剔的顾客提供真正的奢华购物体验的愿望。
+                    </p>
+                    <p>
+                      凭借多年在奢侈品零售领域的经验，我们在高级珠宝、瑞士手表和意大利皮革制品的采购和销售方面积累了丰富的专业知识。
+                    </p>
+                    <p>
+                      我们的使命是直接向客户销售最高品质的正品奢侈品，并提供以可靠性和透明度为特色的个性化服务。
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-10 pt-10">
+                    <div>
+                      <h4 className="text-3xl font-serif italic mb-2">25+</h4>
+                      <p className="text-[9px] uppercase tracking-[0.2em] opacity-40">Years of Expertise</p>
+                    </div>
+                    <div>
+                      <h4 className="text-3xl font-serif italic mb-2">12</h4>
+                      <p className="text-[9px] uppercase tracking-[0.2em] opacity-40">Global Boutiques</p>
+                    </div>
+                    <div>
+                      <h4 className="text-3xl font-serif italic mb-2">100%</h4>
+                      <p className="text-[9px] uppercase tracking-[0.2em] opacity-40">Authenticity</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="relative aspect-[4/5] bg-[#F5F2ED] overflow-hidden">
+                  <img src="https://picsum.photos/seed/heritage/1200/1500" alt="Heritage" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  <div className="absolute inset-0 bg-black/5" />
+                </div>
+              </div>
+            </section>
+          )}
         </main>
       )}
 
@@ -525,16 +679,98 @@ export default function App() {
       )}
 
       {view === 'visualizer' && (
-        <main className="max-w-[1800px] mx-auto grid grid-cols-1 lg:grid-cols-12 min-h-[calc(100vh-89px)]">
+        <main className="max-w-[1800px] mx-auto grid grid-cols-1 lg:grid-cols-12 min-h-[calc(100vh-89px)] bg-[#FDFDFB]">
+          <AnimatePresence>
+            {showOptimizer && (
+              <ImageOptimizer 
+                products={products} 
+                onUpdateProduct={updateProduct} 
+                onClose={() => setShowOptimizer(false)} 
+              />
+            )}
+            {showShopifyImport && (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm"
+              >
+                <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+                  <div className="px-8 py-6 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-[#95BF47] rounded-xl flex items-center justify-center">
+                        <ShoppingBag className="w-5 h-5 text-white" />
+                      </div>
+                      <h2 className="text-xl font-serif font-medium tracking-tight">Import from Shopify</h2>
+                    </div>
+                    <button onClick={() => setShowShopifyImport(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                      <X className="w-6 h-6 text-slate-400" />
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-8">
+                    {isFetchingShopify ? (
+                      <div className="flex flex-col items-center justify-center py-20 gap-4">
+                        <Loader2 className="w-10 h-10 text-[#95BF47] animate-spin" />
+                        <p className="text-sm font-medium text-slate-400 uppercase tracking-widest">Fetching Shopify Products...</p>
+                      </div>
+                    ) : shopifyProducts.length > 0 ? (
+                      <div className="grid grid-cols-2 gap-6">
+                        {shopifyProducts.map((p) => (
+                          <div 
+                            key={p.id} 
+                            onClick={async () => {
+                              if (p.image && p.image.src) {
+                                try {
+                                  const response = await fetch(p.image.src);
+                                  const blob = await response.blob();
+                                  const base64 = await fileToBase64(new File([blob], "shopify-image.png", { type: blob.type }));
+                                  setProducts(prev => [...prev, {
+                                    id: p.id.toString(),
+                                    name: p.title,
+                                    url: p.image.src,
+                                    base64: base64.split(',')[1],
+                                    mimeType: blob.type
+                                  }]);
+                                  setShowShopifyImport(false);
+                                } catch (err) {
+                                  alert("Failed to import image from Shopify.");
+                                }
+                              }
+                            }}
+                            className="group cursor-pointer border border-slate-100 rounded-xl overflow-hidden hover:border-[#95BF47] transition-all"
+                          >
+                            <div className="aspect-square bg-slate-50 overflow-hidden">
+                              {p.image && <img src={p.image.src} alt={p.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform" referrerPolicy="no-referrer" />}
+                            </div>
+                            <div className="p-4">
+                              <h4 className="text-[10px] uppercase tracking-[0.1em] font-bold truncate">{p.title}</h4>
+                              <p className="text-[9px] opacity-40 mt-1">ID: {p.id}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-20">
+                        <p className="text-slate-400">No products found in your Shopify store.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
           {/* Sidebar Controls - Left Rail */}
-          <aside className="lg:col-span-3 border-r border-[#1A1A1A]/10 p-10 space-y-12 bg-white">
+          <aside className="lg:col-span-3 border-r border-[#1A1A1A]/10 p-10 space-y-12 bg-white/80 backdrop-blur-xl sticky top-[89px] h-[calc(100vh-89px)] overflow-y-auto">
             {/* Company Introduction */}
-            <section className="space-y-4">
-              <h2 className="text-[10px] uppercase tracking-[0.3em] font-bold text-[#1A1A1A]/40">Our Heritage</h2>
-              <p className="text-[12px] leading-relaxed font-serif italic text-[#1A1A1A]/80">
+            <section className="space-y-6">
+              <div className="flex items-center gap-4 opacity-30">
+                <div className="w-8 h-px bg-[#1A1A1A]" />
+                <h2 className="text-[10px] uppercase tracking-[0.3em] font-bold">Our Heritage</h2>
+              </div>
+              <p className="text-[15px] leading-relaxed font-serif italic text-[#1A1A1A]">
                 "Landmark Global Trade Inc. 的创立源于对卓越的追求，以及为最挑剔的顾客提供真正的奢华购物体验的愿望。"
               </p>
-              <p className="text-[11px] leading-relaxed text-[#1A1A1A]/60">
+              <p className="text-[12px] leading-relaxed text-[#1A1A1A]/50">
                 凭借多年在奢侈品零售领域的经验，我们在高级珠宝、瑞士手表和意大利皮革制品的采购和销售方面积累了丰富的专业知识。
               </p>
             </section>
@@ -549,16 +785,44 @@ export default function App() {
             <div 
               {...getProductProps()} 
               className={cn(
-                "border border-[#1A1A1A]/10 rounded-sm p-12 transition-all cursor-pointer flex flex-col items-center justify-center gap-5 text-center group",
+                "border border-[#1A1A1A]/10 rounded-sm p-12 transition-all cursor-pointer flex flex-col items-center justify-center gap-5 text-center group relative overflow-hidden",
                 isProductDrag ? "bg-[#F5F2ED] border-[#1A1A1A]" : "bg-white hover:bg-[#FDFDFB] hover:border-[#1A1A1A]/30"
               )}
             >
               <input {...getProductInput()} />
-              <div className="w-14 h-14 border border-[#1A1A1A]/10 rounded-full flex items-center justify-center group-hover:border-[#1A1A1A]/30 transition-colors">
-                <Plus className="w-6 h-6 text-[#1A1A1A]/40 group-hover:text-[#1A1A1A] transition-colors" />
+              {products.length === 0 && (
+                <div className="absolute inset-0 opacity-5 group-hover:opacity-10 transition-opacity">
+                  <img src="https://picsum.photos/seed/luxury-watch/800/800" alt="Placeholder" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                </div>
+              )}
+              <div className="relative z-10 flex flex-col items-center gap-5">
+                <div className="w-14 h-14 border border-[#1A1A1A]/10 rounded-full flex items-center justify-center group-hover:border-[#1A1A1A]/30 transition-colors bg-white/80 backdrop-blur-sm">
+                  <Plus className="w-6 h-6 text-[#1A1A1A]/40 group-hover:text-[#1A1A1A] transition-colors" />
+                </div>
+                <p className="text-[10px] uppercase tracking-[0.2em] font-bold">Upload Luxury Item</p>
               </div>
-              <p className="text-[10px] uppercase tracking-[0.2em] font-bold">Upload Luxury Item</p>
             </div>
+
+            {products.length > 0 && (
+              <button 
+                onClick={() => setShowOptimizer(true)}
+                className="w-full py-4 border border-[#1A1A1A] text-[#1A1A1A] text-[9px] uppercase tracking-[0.3em] font-bold hover:bg-[#F5F2ED] transition-all flex items-center justify-center gap-2"
+              >
+                <Sparkles className="w-3 h-3" />
+                Optimize Images (图片优化)
+              </button>
+            )}
+
+            <button 
+              onClick={() => {
+                setShowShopifyImport(true);
+                fetchShopifyProducts();
+              }}
+              className="w-full py-4 bg-[#95BF47] text-white text-[9px] uppercase tracking-[0.3em] font-bold hover:bg-[#7A9C3A] transition-all flex items-center justify-center gap-2"
+            >
+              <ShoppingBag className="w-3 h-3" />
+              Import from Shopify (从Shopify导入)
+            </button>
 
             <div className="grid grid-cols-2 gap-4">
               <AnimatePresence>
@@ -678,6 +942,31 @@ export default function App() {
                 </button>
               ))}
             </div>
+
+            {config.background.type === 'custom' && (
+              <div 
+                {...getBgProps()} 
+                className={cn(
+                  "mt-4 border border-[#1A1A1A]/10 rounded-sm p-8 transition-all cursor-pointer flex flex-col items-center justify-center gap-4 text-center group relative overflow-hidden aspect-video",
+                  isBgDrag ? "bg-[#F5F2ED] border-[#1A1A1A]" : "bg-white hover:bg-[#FDFDFB] hover:border-[#1A1A1A]/30"
+                )}
+              >
+                <input {...getBgInput()} />
+                {config.background.customUrl ? (
+                  <img src={config.background.customUrl} alt="Custom BG" className="absolute inset-0 w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="absolute inset-0 opacity-5 group-hover:opacity-10 transition-opacity">
+                    <img src="https://picsum.photos/seed/boutique/1200/800" alt="Placeholder" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  </div>
+                )}
+                <div className="relative z-10 flex flex-col items-center gap-3">
+                  <Upload className="w-5 h-5 text-[#1A1A1A]/40 group-hover:text-[#1A1A1A] transition-colors" />
+                  <p className="text-[9px] uppercase tracking-[0.2em] font-bold">
+                    {config.background.customUrl ? "Change Background" : "Upload Custom Scene"}
+                  </p>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Action Button */}
@@ -702,60 +991,104 @@ export default function App() {
         </aside>
 
         {/* Main Preview Area - Right Side */}
-        <div className="lg:col-span-9 p-16 bg-[#FDFDFB] overflow-y-auto max-h-[calc(100vh-89px)]">
+        <div className="lg:col-span-9 p-16 lg:p-24 bg-[#FDFDFB] overflow-y-auto max-h-[calc(100vh-89px)] relative">
+          <div className="absolute top-0 right-0 p-10 pointer-events-none opacity-[0.03]">
+            <Globe className="w-96 h-96" />
+          </div>
+
           {results.length === 0 && !isGenerating ? (
-            <div className="h-full space-y-32">
-              <div className="flex flex-col items-center justify-center text-center max-w-3xl mx-auto pt-20">
-                <div className="w-px h-32 bg-[#1A1A1A]/10 mb-16" />
-                <h2 className="text-6xl font-serif font-light italic mb-10 leading-tight tracking-tight">The Art of <br /> Luxury Presentation</h2>
-                <p className="text-[13px] uppercase tracking-[0.25em] leading-relaxed text-[#1A1A1A]/50 mb-16 max-w-xl">
+            <div className="h-full space-y-40">
+              <div className="flex flex-col items-center justify-center text-center max-w-4xl mx-auto pt-20">
+                <motion.div 
+                  initial={{ height: 0 }}
+                  animate={{ height: 128 }}
+                  transition={{ duration: 1, ease: "easeInOut" }}
+                  className="w-px bg-[#1A1A1A] mb-16" 
+                />
+                <motion.h2 
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.5 }}
+                  className="text-7xl md:text-8xl font-serif font-light italic mb-12 leading-[0.9] tracking-tight"
+                >
+                  The Art of <br /> 
+                  <span className="pl-24">Luxury Presentation</span>
+                </motion.h2>
+                <motion.p 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 1 }}
+                  className="text-[14px] uppercase tracking-[0.3em] leading-relaxed text-[#1A1A1A]/50 mb-20 max-w-2xl font-light"
+                >
                   "我们的使命是直接向客户销售最高品质的正品奢侈品，并提供以可靠性和透明度为特色的个性化服务。"
-                </p>
-                <div className="flex gap-16 mb-16">
-                  <div className="flex flex-col items-center">
-                    <Gem className="w-8 h-8 mb-3 opacity-20" />
-                    <span className="text-[10px] uppercase tracking-[0.3em] opacity-40">Jewelry</span>
-                  </div>
-                  <div className="flex flex-col items-center">
-                    <Watch className="w-8 h-8 mb-3 opacity-20" />
-                    <span className="text-[10px] uppercase tracking-[0.3em] opacity-40">Watches</span>
-                  </div>
-                  <div className="flex flex-col items-center">
-                    <Briefcase className="w-8 h-8 mb-3 opacity-20" />
-                    <span className="text-[10px] uppercase tracking-[0.3em] opacity-40">Leather</span>
-                  </div>
-                </div>
+                </motion.p>
+                
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 1.5 }}
+                  className="flex gap-24 mb-20"
+                >
+                  {[
+                    { icon: Gem, label: 'Jewelry' },
+                    { icon: Watch, label: 'Watches' },
+                    { icon: Briefcase, label: 'Leather' }
+                  ].map((item, i) => (
+                    <div key={i} className="flex flex-col items-center group">
+                      <div className="w-16 h-16 rounded-full border border-[#1A1A1A]/5 flex items-center justify-center mb-4 group-hover:border-[#1A1A1A]/20 transition-all">
+                        <item.icon className="w-6 h-6 opacity-20 group-hover:opacity-60 transition-all" />
+                      </div>
+                      <span className="text-[10px] uppercase tracking-[0.4em] opacity-40 group-hover:opacity-100 transition-all">{item.label}</span>
+                    </div>
+                  ))}
+                </motion.div>
               </div>
 
               {/* Featured Editorial Section */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                <div className="group cursor-pointer">
-                  <div className="aspect-[4/5] bg-[#F5F2ED] overflow-hidden mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-16">
+                <motion.div 
+                  initial={{ opacity: 0, x: -20 }}
+                  whileInView={{ opacity: 1, x: 0 }}
+                  viewport={{ once: true }}
+                  className="group cursor-pointer"
+                >
+                  <div className="aspect-[4/5] bg-[#F5F2ED] overflow-hidden mb-8 relative">
                     <img 
                       src="https://picsum.photos/seed/belt/1200/1500" 
                       alt="Dehanche Belts" 
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-1000"
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-[2s]"
                       referrerPolicy="no-referrer"
                     />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors" />
                   </div>
-                  <h3 className="text-[11px] uppercase tracking-[0.3em] font-bold mb-2">Dehanche's Beautiful Belts</h3>
-                  <p className="text-[10px] uppercase tracking-[0.2em] opacity-40 mb-4 italic">The season's most coveted accessory</p>
-                  <button className="text-[9px] uppercase tracking-[0.3em] font-bold border-b border-[#1A1A1A] pb-1 hover:opacity-50 transition-opacity">Shop the Collection</button>
-                </div>
+                  <div className="space-y-4">
+                    <h3 className="text-[12px] uppercase tracking-[0.4em] font-bold">Dehanche's Beautiful Belts</h3>
+                    <p className="text-[11px] uppercase tracking-[0.2em] opacity-40 italic">The season's most coveted accessory</p>
+                    <button className="text-[10px] uppercase tracking-[0.4em] font-bold border-b border-[#1A1A1A] pb-2 hover:opacity-50 transition-opacity">Shop the Collection</button>
+                  </div>
+                </motion.div>
 
-                <div className="group cursor-pointer">
-                  <div className="aspect-[4/5] bg-[#F5F2ED] overflow-hidden mb-6">
+                <motion.div 
+                  initial={{ opacity: 0, x: 20 }}
+                  whileInView={{ opacity: 1, x: 0 }}
+                  viewport={{ once: true }}
+                  className="group cursor-pointer"
+                >
+                  <div className="aspect-[4/5] bg-[#F5F2ED] overflow-hidden mb-8 relative">
                     <img 
                       src="https://picsum.photos/seed/sunglasses/1200/1500" 
                       alt="Loewe Eyewear" 
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-1000"
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-[2s]"
                       referrerPolicy="no-referrer"
                     />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors" />
                   </div>
-                  <h3 className="text-[11px] uppercase tracking-[0.3em] font-bold mb-2">Loewe Eyewear Iconic Sunglasses</h3>
-                  <p className="text-[10px] uppercase tracking-[0.2em] opacity-40 mb-4 italic">Signature silhouettes for the modern gaze</p>
-                  <button className="text-[9px] uppercase tracking-[0.3em] font-bold border-b border-[#1A1A1A] pb-1 hover:opacity-50 transition-opacity">Shop the Collection</button>
-                </div>
+                  <div className="space-y-4">
+                    <h3 className="text-[12px] uppercase tracking-[0.4em] font-bold">Loewe Eyewear Iconic Sunglasses</h3>
+                    <p className="text-[11px] uppercase tracking-[0.2em] opacity-40 italic">Signature silhouettes for the modern gaze</p>
+                    <button className="text-[10px] uppercase tracking-[0.4em] font-bold border-b border-[#1A1A1A] pb-2 hover:opacity-50 transition-opacity">Shop the Collection</button>
+                  </div>
+                </motion.div>
               </div>
             </div>
           ) : (
@@ -808,8 +1141,8 @@ export default function App() {
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-20 items-center">
                       <div className="lg:col-span-8">
                         <div className="aspect-[4/5] lg:aspect-[16/9] bg-[#F5F2ED] overflow-hidden border border-[#1A1A1A]/5 relative shadow-2xl shadow-black/[0.02]">
-                          <img src={result.imageUrl} alt={result.medium} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                          <div className="absolute top-8 left-8">
+                          <ZoomableImage src={result.imageUrl} alt={result.medium} />
+                          <div className="absolute top-8 left-8 pointer-events-none">
                             <span className="bg-white/95 backdrop-blur px-5 py-2 text-[8px] uppercase tracking-[0.3em] font-bold border border-[#1A1A1A]/5 shadow-sm">
                               {result.medium}
                             </span>
@@ -840,6 +1173,22 @@ export default function App() {
                             <ArrowRight className="w-4 h-4 group-hover/link:translate-x-1 transition-transform" />
                           </a>
                           <div className="w-px h-4 bg-[#1A1A1A]/10" />
+                          <button 
+                            onClick={() => {
+                              const productId = prompt("Enter Shopify Product ID to upload to:");
+                              if (productId) uploadToShopify(result, productId);
+                            }}
+                            disabled={isUploadingToShopify === result.id}
+                            className="text-[10px] uppercase tracking-[0.3em] font-bold hover:opacity-40 transition-opacity flex items-center gap-2 text-[#95BF47]"
+                          >
+                            {isUploadingToShopify === result.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <ShoppingBag className="w-3 h-3" />
+                            )}
+                            <span>{isUploadingToShopify === result.id ? "Uploading..." : "Export to Shopify"}</span>
+                          </button>
+                          <div className="w-px h-4 bg-[#1A1A1A]/10" />
                           <button className="text-[10px] uppercase tracking-[0.3em] font-bold hover:opacity-40 transition-opacity flex items-center gap-2">
                             <ExternalLink className="w-3 h-3" />
                             <span>Share</span>
@@ -855,6 +1204,8 @@ export default function App() {
         </div>
       </main>
       )}
+
+      {view === 'optimizer' && <ImageOptimizer />}
 
       {view === 'contact' && (
         <main className="max-w-[1800px] mx-auto p-10 lg:p-20 min-h-[70vh] flex items-center">

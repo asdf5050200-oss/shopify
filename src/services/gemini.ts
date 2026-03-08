@@ -56,3 +56,38 @@ export async function generateMockup(
     prompt
   };
 }
+
+export async function optimizeImage(
+  base64: string,
+  mimeType: string,
+  task: 'remove-bg' | 'enhance'
+): Promise<string> {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+
+  const prompt = task === 'remove-bg' 
+    ? "Remove the background from this image. Output only the product on a clean, pure white background. Maintain all product details and colors perfectly."
+    : "Enhance this product image. Improve the lighting, sharpness, and overall quality while maintaining the original design and features. Output the enhanced product on a clean white background.";
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash-image',
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            data: base64,
+            mimeType: mimeType
+          }
+        },
+        { text: prompt }
+      ]
+    }
+  });
+
+  const imagePart = response.candidates?.[0]?.content?.parts.find(p => p.inlineData);
+  
+  if (!imagePart || !imagePart.inlineData) {
+    throw new Error("Failed to optimize image.");
+  }
+
+  return `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+}
